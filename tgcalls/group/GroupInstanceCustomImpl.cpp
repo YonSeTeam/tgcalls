@@ -2596,9 +2596,17 @@ public:
         return impl ? impl->screencastQuality() : std::nullopt;
     }
 
-    // YonSeGram: the half size layer gets a share that keeps it readable.
+    // YonSeGram: SimulcastRateAllocator fills the half size layer up to its
+    // target (3/4 of this cap) before the full layer may start at its minimum,
+    // so this layer is kept to an eighth of the full cap, at most 500 kbit/s.
     static int screencastLowLayerBitrate(int fullBitrate) {
-        return std::max(fullBitrate * 3 / 10, 300000);
+        return std::min(fullBitrate / 8, 500000);
+    }
+
+    static int screencastFullBitrate(ScreencastQuality const &quality) {
+        return (quality.maxBitrateKbps > 0)
+            ? quality.maxBitrateKbps * 1000
+            : (800000 + 100000) * 2;
     }
 
     void watchScreencastQuality() {
@@ -2624,9 +2632,7 @@ public:
     }
 
     void adjustScreencastSendParams(ScreencastQuality const &quality) {
-        const auto fullBitrate = (quality.maxBitrateKbps > 0)
-            ? quality.maxBitrateKbps * 1000
-            : (800000 + 100000) * 2;
+        const auto fullBitrate = screencastFullBitrate(quality);
         const auto minBitrate = std::min(300000, fullBitrate);
         _threads->getWorkerThread()->BlockingCall([&]() {
             webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->send_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
@@ -2636,7 +2642,7 @@ public:
                 encoding.max_framerate = double(std::max(quality.fps, 1));
                 if (i + 1 < count) {
                     const auto low = screencastLowLayerBitrate(fullBitrate);
-                    encoding.min_bitrate_bps = std::min(100000, low);
+                    encoding.min_bitrate_bps = std::min(50000, low);
                     encoding.max_bitrate_bps = low;
                     encoding.scale_resolution_down_by = (count == 2) ? 2.0 : double(1 << (count - 1 - i));
                 } else {
@@ -3292,15 +3298,16 @@ public:
                 preferences.start_bitrate_bps = std::max(preferences.min_bitrate_bps, 400 * 1000);
             }
             if (const auto quality = screencastQuality()) {
-                const auto fullBitrate = (quality->maxBitrateKbps > 0)
-                    ? quality->maxBitrateKbps * 1000
-                    : (800000 + 100000) * 2;
+                const auto fullBitrate = screencastFullBitrate(*quality);
                 const auto layers = int(_outgoingVideoSsrcs.simulcastLayers.size());
                 const auto total = fullBitrate
                     + ((layers > 1) ? screencastLowLayerBitrate(fullBitrate) : 0)
                     + _outgoingAudioBitrateKbit * 1000;
                 preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, total);
                 if (resetStartBitrate) {
+                    // YonSeGram: covers the half size layer target (at most
+                    // 375 kbit/s) and the full layer minimum (300 kbit/s) with
+                    // audio and packet overhead, so the full layer starts at once.
                     preferences.start_bitrate_bps = std::max(preferences.min_bitrate_bps, std::min(1000 * 1000, total));
                 } else {
                     // YonSeGram: any start rate here restarts the bandwidth estimate from it.
