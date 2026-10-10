@@ -6,6 +6,23 @@
 
 namespace tgcalls {
 
+namespace {
+
+// YonSeGram: no customizer for relays that are not Telegram's, so nothing adds
+// the "Telegram " SOFTWARE attribute to their STUN messages.
+cricket::CreateRelayPortArgs TurnPortArgs(const cricket::CreateRelayPortArgs &args, const std::vector<RtcServer> &servers) {
+    cricket::CreateRelayPortArgs result = args;
+    for (const auto &server : servers) {
+        if (server.isExternal && args.server_address->address == rtc::SocketAddress(server.host, server.port)) {
+            result.turn_customizer = nullptr;
+            break;
+        }
+    }
+    return result;
+}
+
+} // namespace
+
 ReflectorRelayPortFactory::ReflectorRelayPortFactory(std::vector<RtcServer> servers, bool standaloneReflectorMode, uint32_t standaloneReflectorRoleId, rtc::SocketFactory *underlyingSocketFactory, bool resolveRemoteCandidateIp) :
 _servers(servers),
 _standaloneReflectorMode(standaloneReflectorMode),
@@ -38,7 +55,7 @@ std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::
         }
         return port;
     } else {
-        auto port = cricket::TurnPort::Create(args, udp_socket);
+        auto port = cricket::TurnPort::Create(TurnPortArgs(args, _servers), udp_socket);
         if (!port) {
             return nullptr;
         }
@@ -69,7 +86,7 @@ std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::
         }
         return port;
     } else {
-        auto port = cricket::TurnPort::Create(args, min_port, max_port);
+        auto port = cricket::TurnPort::Create(TurnPortArgs(args, _servers), min_port, max_port);
         if (!port) {
             return nullptr;
         }
