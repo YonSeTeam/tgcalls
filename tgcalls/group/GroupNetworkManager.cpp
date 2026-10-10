@@ -422,7 +422,9 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
         portAllocator->SetCandidateFilter(cricket::CF_RELAY);
     }
 
-    portAllocator->SetConfiguration({}, turnServers, 2, webrtc::NO_PRUNE, _turnCustomizer.get());
+    // YonSeGram: a pooled session would hold TURN allocations on the relays without using them.
+    const int candidatePoolSize = turnServers.empty() ? 2 : 0;
+    portAllocator->SetConfiguration({}, turnServers, candidatePoolSize, webrtc::NO_PRUNE, _turnCustomizer.get());
 
     webrtc::IceTransportInit iceTransportInit;
     iceTransportInit.set_port_allocator(portAllocator.get());
