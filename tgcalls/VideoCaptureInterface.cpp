@@ -12,4 +12,18 @@ std::unique_ptr<VideoCaptureInterface> VideoCaptureInterface::Create(
 
 VideoCaptureInterface::~VideoCaptureInterface() = default;
 
+bool HasVideoEncoder(std::string const &codecName) {
+    // The same factory InstanceV2Impl and InstanceV2ReferenceImpl encode with.
+    const auto factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(true);
+    if (!factory) {
+        return false;
+    }
+    for (const auto &format : factory->GetSupportedFormats()) {
+        if (format.name == codecName) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace tgcalls

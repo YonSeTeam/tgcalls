@@ -1599,6 +1599,13 @@ public:
                             }
                             codecPreferences.push_back(codecCapability.name);
                         }
+                        if (screencastQuality) {
+                            // YonSeGram: the VP9 screen sharing mode caps the
+                            // frame rate at 5 fps, so it goes last.
+                            std::stable_partition(codecPreferences.begin(), codecPreferences.end(), [](std::string const &name) {
+                                return name != cricket::kVp9CodecName;
+                            });
+                        }
 
                         std::vector<webrtc::RtpCodecCapability> codecCapabilities;
                         for (const auto &name : codecPreferences) {
