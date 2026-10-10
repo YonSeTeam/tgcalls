@@ -611,12 +611,25 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
 
     for (auto &server : _rtcServers) {
         if (server.isTurn) {
-            turnServers.push_back(cricket::RelayServerConfig(
+            cricket::ProtocolType proto = cricket::PROTO_UDP;
+            if (server.isTls) {
+                proto = cricket::PROTO_TLS;
+            } else if (server.isTcp) {
+                proto = cricket::PROTO_TCP;
+            }
+            cricket::RelayServerConfig relayConfig(
                 rtc::SocketAddress(server.host, server.port),
                 server.login,
                 server.password,
-                server.isTcp ? cricket::PROTO_TCP : cricket::PROTO_UDP
-            ));
+                proto
+            );
+            if (server.isTls) {
+                // YonSeGram: the server is addressed by IP, not by name, so there is no name to
+                // check the certificate chain against. TLS does not protect the media here (it is
+                // encrypted higher up the stack); it only makes the traffic look like HTTPS.
+                relayConfig.tls_cert_policy = cricket::TlsCertPolicy::TLS_CERT_POLICY_INSECURE_NO_CHECK;
+            }
+            turnServers.push_back(std::move(relayConfig));
         } else {
             rtc::SocketAddress stunAddress = rtc::SocketAddress(server.host, server.port);
             stunServers.insert(stunAddress);

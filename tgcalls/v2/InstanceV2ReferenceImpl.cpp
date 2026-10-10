@@ -368,6 +368,7 @@ public:
     _rtcServers(descriptor.rtcServers),
     _proxy(std::move(descriptor.proxy)),
     _enableP2P(descriptor.config.enableP2P),
+    _relayTcpTls(descriptor.config.relayTcpTls),
     _encryptionKey(std::move(descriptor.encryptionKey)),
     _stateUpdated(descriptor.stateUpdated),
     _signalBarsUpdated(descriptor.signalBarsUpdated),
@@ -715,7 +716,9 @@ public:
         const bool allowHostnameIceServers = getCustomParameterBoolDefaultTrue(_customParameters, "network_reference_allow_hostname_ice_servers");
 
         for (auto &server : _rtcServers) {
-            if (server.isTcp) {
+            // YonSeGram: TCP and TLS fallback routes make sense only for relays and only when
+            // allowed; otherwise only UDP addresses are taken, as upstream does.
+            if (server.isTcp && !(_relayTcpTls && server.isTurn)) {
                 continue;
             }
 
@@ -755,10 +758,18 @@ public:
 
                 webrtc::PeerConnectionInterface::IceServer mappedServer;
 
+                const std::string scheme = server.isTls ? "turns:" : "turn:";
+                const std::string transport = server.isTcp ? "?transport=tcp" : "";
                 mappedServer.urls.push_back(
-                    "turn:" + address.HostAsURIString() + ":" + std::to_string(server.port));
+                    scheme + address.HostAsURIString() + ":" + std::to_string(server.port) + transport);
                 mappedServer.username = server.login;
                 mappedServer.password = server.password;
+                if (server.isTls) {
+                    // YonSeGram: Telegram's relays come as IP addresses, with no name to check the
+                    // certificate chain against. TLS does not protect the media here (it is encrypted
+                    // higher up the stack); it only makes the traffic look like HTTPS.
+                    mappedServer.tls_cert_policy = webrtc::PeerConnectionInterface::TlsCertPolicy::kTlsCertPolicyInsecureNoCheck;
+                }
 
                 peerConnectionConfiguration.servers.push_back(mappedServer);
             } else {
@@ -1833,6 +1844,7 @@ private:
     std::map<std::string, json11::Json> _customParameters;
     std::unique_ptr<Proxy> _proxy;
     bool _enableP2P = false;
+    bool _relayTcpTls = false;
     EncryptionKey _encryptionKey;
     std::function<void(State)> _stateUpdated;
     std::function<void(int)> _signalBarsUpdated;

@@ -52,6 +52,7 @@ struct RtcServer {
 	std::string password;
 	bool isTurn = false;
     bool isTcp = false;
+    bool isTls = false;
 };
 
 enum class EndpointType {
@@ -123,6 +124,9 @@ struct Config {
     std::vector<std::string> preferredVideoCodecs;
     ProtocolVersion protocolVersion = ProtocolVersion::V0;
     std::string customParameters = "";
+    // YonSeGram: lets InstanceV2ReferenceImpl take TCP and TLS relays. Without it
+    // that implementation skips every TCP server, as upstream does.
+    bool relayTcpTls = false;
 };
 
 struct EncryptionKey {
