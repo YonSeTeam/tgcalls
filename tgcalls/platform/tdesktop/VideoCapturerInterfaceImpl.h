@@ -34,6 +34,7 @@ public:
 	}
 	void setOnFatalError(std::function<void()> error) override;
 	void setOnPause(std::function<void(bool)> pause) override;
+	void setScreencastQuality(ScreencastQuality const &quality) override;
 
 private:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;

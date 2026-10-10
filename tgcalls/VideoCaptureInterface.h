@@ -5,6 +5,8 @@
 #include <memory>
 #include <functional>
 
+#include "ScreencastQuality.h"
+
 namespace rtc {
 template <typename VideoFrameT>
 class VideoSinkInterface;
@@ -54,6 +56,9 @@ public:
     }
     virtual void withNativeImplementation(std::function<void(void *)> completion) {
         completion(nullptr);
+    }
+    // YonSeGram: capture size, frame rate and encoding of a shared screen.
+    virtual void setScreencastQuality(ScreencastQuality quality) {
     }
 };
 

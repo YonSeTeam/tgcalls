@@ -28,6 +28,12 @@ DesktopCaptureSource DesktopCaptureSourceForKey(
 	const std::string &uniqueKey);
 bool ShouldBeDesktopCapture(const std::string &uniqueKey);
 
+// YonSeGram: what the encoder accepts right now, 0 for no limit.
+struct DesktopCaptureLimits {
+	int maxPixels = 0;
+	int maxFps = 0;
+};
+
 class DesktopCaptureSourceHelper {
 public:
 	DesktopCaptureSourceHelper(
@@ -45,6 +51,12 @@ public:
 	void stop() const;
     void setOnFatalError(std::function<void ()>) const;
     void setOnPause(std::function<void (bool)>) const;
+	// YonSeGram: frames scaled to at most maxHeight (0 keeps the source) at
+	// the given rate, both lowered further by the limits when they are set.
+	void setQuality(
+		int maxHeight,
+		double fps,
+		std::function<DesktopCaptureLimits()> limits) const;
 private:
 	struct Renderer;
 	std::shared_ptr<Renderer> _renderer;

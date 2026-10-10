@@ -2,6 +2,7 @@
 #define TGCALLS_VIDEO_CAPTURER_INTERFACE_H
 
 #include "Instance.h"
+#include "ScreencastQuality.h"
 
 #include <memory>
 #include <functional>
@@ -33,6 +34,9 @@ public:
     }
     virtual void withNativeImplementation(std::function<void(void *)> completion) {
         completion(nullptr);
+    }
+    // YonSeGram: only desktop capturers use it.
+    virtual void setScreencastQuality(ScreencastQuality const &quality) {
     }
     
 };

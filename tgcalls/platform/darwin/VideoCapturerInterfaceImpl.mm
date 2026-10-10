@@ -281,6 +281,14 @@
 #endif
 }
 
+- (void)setScreencastMaxHeight:(int)maxHeight fps:(double)fps {
+#ifndef WEBRTC_IOS
+    if ([(id)_videoCapturer isKindOfClass:[DesktopSharingCapturer class]]) {
+        [(DesktopSharingCapturer *)_videoCapturer setScreencastMaxHeight:maxHeight fps:fps];
+    }
+#endif
+}
+
 - (void)setIsEnabled:(bool)isEnabled {
 #ifdef WEBRTC_IOS
     if (_videoCameraCapturer) {
@@ -452,6 +460,17 @@ void VideoCapturerInterfaceImpl::setOnPause(std::function<void(bool)> pause) {
     });
 }
 
+void VideoCapturerInterfaceImpl::setScreencastQuality(ScreencastQuality const &quality) {
+    VideoCapturerInterfaceImplHolder *implReference = _implReference;
+    const auto maxHeight = quality.maxHeight;
+    const auto fps = double(quality.fps);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (implReference.reference != nil) {
+            VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
+            [reference setScreencastMaxHeight:maxHeight fps:fps];
+        }
+    });
+}
 
 int VideoCapturerInterfaceImpl::getRotation() {
     __block int value = 0;

@@ -84,6 +84,9 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId, bool isSc
         if (_onPause) {
             _videoCapturer->setOnPause(_onPause);
         }
+        if (_screencastQuality) {
+            _videoCapturer->setScreencastQuality(*_screencastQuality);
+        }
 		_videoCapturer->setState(_state);
 	}
 }
@@ -158,6 +161,24 @@ void VideoCaptureInterfaceObject::setOnIsActiveUpdated(std::function<void(bool)>
     _onIsActiveUpdated = onIsActiveUpdated;
 }
 
+void VideoCaptureInterfaceObject::setScreencastQuality(ScreencastQuality quality) {
+    _screencastQuality = std::move(quality);
+    if (_videoCapturer) {
+        _videoCapturer->setScreencastQuality(*_screencastQuality);
+    }
+    if (_screencastQualityUpdated) {
+        _screencastQualityUpdated();
+    }
+}
+
+std::optional<ScreencastQuality> VideoCaptureInterfaceObject::screencastQuality() const {
+    return _screencastQuality;
+}
+
+void VideoCaptureInterfaceObject::setScreencastQualityUpdated(std::function<void()> updated) {
+    _screencastQualityUpdated = std::move(updated);
+}
+
 void VideoCaptureInterfaceObject::setStateUpdated(std::function<void(VideoState)> stateUpdated) {
 	_stateUpdated = stateUpdated;
 }
@@ -211,6 +232,12 @@ void VideoCaptureInterfaceImpl::setOnPause(std::function<void(bool)> pause) {
 void VideoCaptureInterfaceImpl::setOnIsActiveUpdated(std::function<void(bool)> onIsActiveUpdated) {
     _impl.perform([onIsActiveUpdated](VideoCaptureInterfaceObject *impl) {
         impl->setOnIsActiveUpdated(onIsActiveUpdated);
+    });
+}
+
+void VideoCaptureInterfaceImpl::setScreencastQuality(ScreencastQuality quality) {
+    _impl.perform([quality = std::move(quality)](VideoCaptureInterfaceObject *impl) {
+        impl->setScreencastQuality(quality);
     });
 }
 

@@ -19,6 +19,8 @@
 
 @interface DesktopSharingCapturer : NSObject<CapturerInterface>
 - (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)trackSource captureSource:(tgcalls::DesktopCaptureSource)captureSource;
+// YonSeGram: the source adapts to the encoder by itself, so no limits here.
+- (void)setScreencastMaxHeight:(int)maxHeight fps:(double)fps;
 
 @end
 

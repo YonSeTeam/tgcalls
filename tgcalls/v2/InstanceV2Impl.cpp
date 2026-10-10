@@ -445,13 +445,15 @@ public:
         webrtc::VideoBitrateAllocatorFactory *videoBitrateAllocatorFactory,
         std::function<void()> rotationUpdated,
         signaling::MediaContent const &mediaContent,
-        bool isScreencast
+        bool isScreencast,
+        std::string const &preferredCodec = std::string()
     ) :
     _threads(threads),
     _mainSsrc(mediaContent.ssrc),
     _call(call),
     _channelManager(channelManager),
-    _rotationUpdated(rotationUpdated) {
+    _rotationUpdated(rotationUpdated),
+    _isScreencast(isScreencast) {
         cricket::VideoOptions videoOptions;
         videoOptions.is_screencast = isScreencast;
 
@@ -478,6 +480,11 @@ public:
 #endif
             cricket::kH264CodecName
         };
+        // YonSeGram: the codec chosen for screen sharing goes first.
+        if (!preferredCodec.empty()) {
+            codecPreferences.erase(std::remove(codecPreferences.begin(), codecPreferences.end(), preferredCodec), codecPreferences.end());
+            codecPreferences.insert(codecPreferences.begin(), preferredCodec);
+        }
 
         std::vector<cricket::VideoCodec> codecs;
         for (const auto &name : codecPreferences) {
@@ -610,6 +617,23 @@ public:
                 });
             });
 
+            if (_isScreencast) {
+                applyScreencastQuality(videoCaptureImpl->screencastQuality());
+                const auto capture = std::weak_ptr<VideoCaptureInterface>(_videoCapture);
+                videoCaptureImpl->setScreencastQualityUpdated([threads = _threads, weak, capture] {
+                    threads->getMediaThread()->PostTask([=] {
+                        const auto strong = weak.lock();
+                        const auto current = capture.lock();
+                        if (!strong || !current || strong->_videoCapture != current) {
+                            return;
+                        }
+                        if (const auto impl = GetVideoCaptureAssumingSameThread(current.get())) {
+                            strong->applyScreencastQuality(impl->screencastQuality());
+                        }
+                    });
+                });
+            }
+
             switch (videoCaptureImpl->getRotation()) {
                 case 0: {
                     _videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation0;
@@ -663,6 +687,52 @@ public:
         });
     }
 
+    // YonSeGram: limits and degradation chosen for a shared screen.
+    void applyScreencastQuality(std::optional<ScreencastQuality> const &quality) {
+        if (!quality) {
+            return;
+        }
+        _threads->getWorkerThread()->BlockingCall([&]() {
+            webrtc::RtpParameters parameters = _outgoingVideoChannel->send_channel()->GetRtpSendParameters(_mainSsrc);
+            if (parameters.encodings.empty()) {
+                parameters.encodings.push_back(webrtc::RtpEncodingParameters());
+            }
+            auto &encoding = parameters.encodings[0];
+            encoding.max_framerate = double(std::max(quality->fps, 1));
+            encoding.max_bitrate_bps = (quality->maxBitrateKbps > 0)
+                ? absl::optional<int>(quality->maxBitrateKbps * 1000)
+                : absl::nullopt;
+            parameters.degradation_preference = quality->preferMotion
+                ? webrtc::DegradationPreference::MAINTAIN_FRAMERATE
+                : webrtc::DegradationPreference::MAINTAIN_RESOLUTION;
+            _outgoingVideoChannel->send_channel()->SetRtpSendParameters(_mainSsrc, parameters);
+        });
+    }
+
+    // YonSeGram: what the stats overlay shows for this stream.
+    std::optional<VideoStreamStats> stats() {
+        std::optional<VideoStreamStats> result;
+        _threads->getWorkerThread()->BlockingCall([&]() {
+            cricket::VideoMediaSendInfo info;
+            if (!_outgoingVideoChannel->send_channel()->GetStats(&info)) {
+                return;
+            }
+            const auto &senders = info.aggregated_senders.empty() ? info.senders : info.aggregated_senders;
+            if (senders.empty()) {
+                return;
+            }
+            const auto &sender = senders.front();
+            result = VideoStreamStats{
+                sender.send_frame_width,
+                sender.send_frame_height,
+                sender.framerate_sent,
+                sender.payload_bytes_sent,
+                sender.codec_name,
+            };
+        });
+        return result;
+    }
+
 public:
     std::shared_ptr<VideoCaptureInterface> videoCapture() {
         return _videoCapture;
@@ -689,6 +759,7 @@ private:
 
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
     signaling::MediaStateMessage::VideoRotation _videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation0;
+    bool _isScreencast = false;
 };
 
 class VideoSinkImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
@@ -841,6 +912,29 @@ public:
 
     uint32_t ssrc() const {
         return _mainVideoSsrc;
+    }
+
+    // YonSeGram: what the stats overlay shows for this stream.
+    std::optional<VideoStreamStats> stats() {
+        std::optional<VideoStreamStats> result;
+        _threads->getWorkerThread()->BlockingCall([&]() {
+            cricket::VideoMediaReceiveInfo info;
+            if (!_videoChannel->receive_channel()->GetStats(&info) || info.receivers.empty()) {
+                return;
+            }
+            const auto &receiver = info.receivers.front();
+            if (receiver.frame_width <= 0) {
+                return;
+            }
+            result = VideoStreamStats{
+                receiver.frame_width,
+                receiver.frame_height,
+                receiver.framerate_decoded,
+                receiver.payload_bytes_received,
+                receiver.codec_name,
+            };
+        });
+        return result;
     }
 
 private:
@@ -1468,7 +1562,8 @@ public:
                                 });
                             },
                             outgoingScreencastContent.value(),
-                            true
+                            true,
+                            screencastCodec()
                         ));
 
                         if (_screencastCapture) {
@@ -2018,6 +2113,37 @@ public:
         }
     }
 
+    // YonSeGram: the screencast codec the client asked for, if any.
+    std::string screencastCodec() {
+        const auto impl = GetVideoCaptureAssumingSameThread(_screencastCapture.get());
+        const auto quality = impl ? impl->screencastQuality() : std::nullopt;
+        return quality ? quality->codec : std::string();
+    }
+
+    // YonSeGram: the sent and the shown stream, and the selected ICE pair.
+    void getVideoStats(std::function<void(VideoStatsSnapshot)> completion) {
+        VideoStatsSnapshot result;
+        if (_outgoingScreencastChannel && _outgoingScreencastChannel->videoCapture()) {
+            result.outgoing = _outgoingScreencastChannel->stats();
+        } else if (_outgoingVideoChannel && _outgoingVideoChannel->videoCapture()) {
+            result.outgoing = _outgoingVideoChannel->stats();
+        }
+        if (_incomingScreencastChannel) {
+            result.incoming = _incomingScreencastChannel->stats();
+        }
+        if (!result.incoming && _incomingVideoChannel) {
+            result.incoming = _incomingVideoChannel->stats();
+        }
+        if (_networkState && _networkState->connection) {
+            const auto &connection = _networkState->connection.value();
+            result.localCandidateType = connection.local.type;
+            result.localAddress = connection.local.address;
+            result.remoteCandidateType = connection.remote.type;
+            result.remoteAddress = connection.remote.address;
+        }
+        completion(std::move(result));
+    }
+
     void setRequestedVideoAspect(float aspect) {
     }
 
@@ -2295,6 +2421,12 @@ void InstanceV2Impl::receiveSignalingData(const std::vector<uint8_t> &data) {
 void InstanceV2Impl::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
     _internal->perform([videoCapture](InstanceV2ImplInternal *internal) {
         internal->setVideoCapture(videoCapture);
+    });
+}
+
+void InstanceV2Impl::getVideoStats(std::function<void(VideoStatsSnapshot)> completion) {
+    _internal->perform([completion](InstanceV2ImplInternal *internal) {
+        internal->getVideoStats(completion);
     });
 }
 

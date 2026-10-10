@@ -144,6 +144,8 @@ struct VideoChannelDescription {
     std::vector<MediaSsrcGroup> ssrcGroups;
     Quality minQuality = Quality::Thumbnail;
     Quality maxQuality = Quality::Thumbnail;
+    // YonSeGram: a height limit asked for in place of the one for maxQuality.
+    int maxHeight = 0;
 };
 
 struct GroupInstanceStats {

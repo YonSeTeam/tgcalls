@@ -11,6 +11,7 @@
 #include <iostream>
 #include <memory>
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <iostream>
 #include <vector>
@@ -24,6 +25,8 @@
 #include "modules/desktop_capture/desktop_capturer.h"
 #include "system_wrappers/include/clock.h"
 #include "api/video/i420_buffer.h"
+#include "common_video/include/video_frame_buffer_pool.h"
+#include "rtc_base/time_utils.h"
 #include "third_party/libyuv/include/libyuv.h"
 
 #ifdef WEBRTC_MAC
@@ -79,6 +82,29 @@ private:
 };
 #endif // WEBRTC_MAC
 
+// YonSeGram: keeps the aspect ratio and the multiple-of-4 sizes upstream uses.
+webrtc::DesktopSize FitDesktopSize(
+        webrtc::DesktopSize size,
+        int maxHeight,
+        int maxPixels) {
+    auto width = double(size.width());
+    auto height = double(size.height());
+    if (maxHeight > 0 && height > maxHeight) {
+        width *= maxHeight / height;
+        height = maxHeight;
+    }
+    if (maxPixels > 0 && width * height > maxPixels) {
+        const auto scale = std::sqrt(maxPixels / (width * height));
+        width *= scale;
+        height *= scale;
+    }
+    const auto align = [](double value) {
+        const auto rounded = int(value);
+        return std::max(rounded - (rounded % 4), 4);
+    };
+    return webrtc::DesktopSize(align(width), align(height));
+}
+
 class SourceFrameCallbackImpl : public webrtc::DesktopCapturer::Callback {
 public:
     SourceFrameCallbackImpl(DesktopSize size, int fps);
@@ -92,7 +118,12 @@ public:
 		std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     void setOnFatalError(std::function<void ()>);
     void setOnPause(std::function<void (bool)>);
+    void setQuality(
+        int maxHeight,
+        std::function<DesktopCaptureLimits()> limits);
 private:
+    void deliverScaled(const webrtc::DesktopFrame &frame);
+
     rtc::scoped_refptr<webrtc::I420Buffer> i420_buffer_;
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
 	std::shared_ptr<
@@ -100,6 +131,11 @@ private:
     DesktopSize size_;
     std::function<void ()> _onFatalError;
     std::function<void (bool)> _onPause;
+    bool _configured = false;
+    int _maxHeight = 0;
+    std::function<DesktopCaptureLimits()> _limits;
+    std::unique_ptr<webrtc::BasicDesktopFrame> _scaled;
+    webrtc::VideoFrameBufferPool _pool{ false, 8 };
 };
 
 class DesktopSourceRenderer {
@@ -116,6 +152,10 @@ public:
     void loop();
     void setOnFatalError(std::function<void ()>);
     void setOnPause(std::function<void (bool)>);
+    void setQuality(
+        int maxHeight,
+        double fps,
+        std::function<DesktopCaptureLimits()> limits);
 private:
     CaptureScheduler &_scheduler;
     std::unique_ptr<webrtc::DesktopCapturer> _capturer;
@@ -127,6 +167,9 @@ private:
     bool _fatalError = false;
     bool _currentlyOnPause = false;
     double _delayMs = 0.;
+    bool _configured = false;
+    double _fps = 0.;
+    std::function<DesktopCaptureLimits()> _limits;
 
 };
 
@@ -152,6 +195,11 @@ void SourceFrameCallbackImpl::OnCaptureResult(
         return;
     } else if (_onPause) {
         _onPause(false);
+    }
+
+    if (_configured) {
+        deliverScaled(*frame);
+        return;
     }
 
     const auto frameSize = frame->size();
@@ -229,6 +277,76 @@ void SourceFrameCallbackImpl::OnCaptureResult(
 	if (const auto sink = _secondarySink.get()) {
 		sink->OnFrame(nativeVideoFrame);
 	}
+}
+
+void SourceFrameCallbackImpl::deliverScaled(
+        const webrtc::DesktopFrame &frame) {
+    const auto limits = _limits ? _limits() : DesktopCaptureLimits();
+    const auto size = FitDesktopSize(
+        frame.size(),
+        _maxHeight,
+        limits.maxPixels);
+    const auto width = size.width();
+    const auto height = size.height();
+    if (frame.size().width() < width || frame.size().height() < height) {
+        return;
+    }
+    auto data = frame.data();
+    auto stride = frame.stride();
+    const auto scale = (frame.size().width() - width >= 4)
+        || (frame.size().height() - height >= 4);
+    if (scale) {
+        if (!_scaled || !_scaled->size().equals(size)) {
+            _scaled = std::make_unique<webrtc::BasicDesktopFrame>(size);
+        }
+        libyuv::ARGBScale(
+            frame.data(),
+            frame.stride(),
+            frame.size().width(),
+            frame.size().height(),
+            _scaled->data(),
+            _scaled->stride(),
+            width,
+            height,
+            libyuv::kFilterBox);
+        data = _scaled->data();
+        stride = _scaled->stride();
+    }
+    const auto buffer = _pool.CreateI420Buffer(width, height);
+    if (!buffer) {
+        return;
+    }
+    libyuv::ARGBToI420(
+        data,
+        stride,
+        buffer->MutableDataY(),
+        buffer->StrideY(),
+        buffer->MutableDataU(),
+        buffer->StrideU(),
+        buffer->MutableDataV(),
+        buffer->StrideV(),
+        width,
+        height);
+    const auto result = webrtc::VideoFrame::Builder()
+        .set_video_frame_buffer(buffer)
+        .set_rotation(webrtc::kVideoRotation_0)
+        .set_timestamp_us(
+            webrtc::Clock::GetRealTimeClock()->CurrentTime().us())
+        .build();
+    if (const auto sink = _sink.get()) {
+        sink->OnFrame(result);
+    }
+    if (const auto sink = _secondarySink.get()) {
+        sink->OnFrame(result);
+    }
+}
+
+void SourceFrameCallbackImpl::setQuality(
+        int maxHeight,
+        std::function<DesktopCaptureLimits()> limits) {
+    _configured = true;
+    _maxHeight = maxHeight;
+    _limits = std::move(limits);
 }
 
 void SourceFrameCallbackImpl::setOutput(
@@ -333,9 +451,20 @@ void DesktopSourceRenderer::loop() {
         return;
     }
 
+    const auto started = rtc::TimeMillis();
     _capturer->CaptureFrame();
+    auto delayMs = _delayMs;
+    if (_configured) {
+        // YonSeGram: count the capture time in, or the rate falls below fps.
+        const auto limits = _limits ? _limits() : DesktopCaptureLimits();
+        const auto fps = (limits.maxFps > 0)
+            ? std::min(_fps, double(limits.maxFps))
+            : _fps;
+        const auto elapsed = double(rtc::TimeMillis() - started);
+        delayMs = std::max(1000. / std::max(fps, 1.) - elapsed, 1.);
+    }
     const auto guard = std::weak_ptr<bool>(_timerGuard);
-    _scheduler.runDelayed(_delayMs, [=, this] {
+    _scheduler.runDelayed(delayMs, [=, this] {
         if (guard.lock()) {
             loop();
         }
@@ -360,6 +489,16 @@ void DesktopSourceRenderer::setOnPause(std::function<void (bool)> pause) {
 void DesktopSourceRenderer::setOutput(
         std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _callback.setOutput(std::move(sink));
+}
+
+void DesktopSourceRenderer::setQuality(
+        int maxHeight,
+        double fps,
+        std::function<DesktopCaptureLimits()> limits) {
+    _configured = true;
+    _fps = fps;
+    _limits = limits;
+    _callback.setQuality(maxHeight, std::move(limits));
 }
 
 void DesktopSourceRenderer::setSecondaryOutput(
@@ -449,6 +588,15 @@ void DesktopCaptureSourceHelper::setOnFatalError(std::function<void ()> error) c
 void DesktopCaptureSourceHelper::setOnPause(std::function<void (bool)> pause) const {
     _renderer->scheduler.runAsync([renderer = _renderer, pause = pause] {
         renderer->renderer->setOnPause(pause);
+    });
+}
+
+void DesktopCaptureSourceHelper::setQuality(
+        int maxHeight,
+        double fps,
+        std::function<DesktopCaptureLimits()> limits) const {
+    _renderer->scheduler.runAsync([=, renderer = _renderer] {
+        renderer->renderer->setQuality(maxHeight, fps, limits);
     });
 }
 

@@ -12,6 +12,10 @@ auto VideoCapturerTrackSource::sink()
 	return _broadcaster;
 }
 
+rtc::VideoSinkWants VideoCapturerTrackSource::wants() const {
+	return _broadcaster->wants();
+}
+
 rtc::VideoSourceInterface<webrtc::VideoFrame> *VideoCapturerTrackSource::source() {
 	return _broadcaster.get();
 }

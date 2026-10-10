@@ -47,6 +47,7 @@ public:
 	void stop(std::function<void(FinalState)> completion) override;
     void sendVideoDeviceUpdated() override {
     }
+    void getVideoStats(std::function<void(VideoStatsSnapshot)> completion) override;
 
 private:
     std::shared_ptr<Threads> _threads;
