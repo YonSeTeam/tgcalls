@@ -3293,6 +3293,9 @@ public:
                 preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, total);
                 if (resetStartBitrate) {
                     preferences.start_bitrate_bps = std::max(preferences.min_bitrate_bps, std::min(1000 * 1000, total));
+                } else {
+                    // YonSeGram: any start rate here restarts the bandwidth estimate from it.
+                    preferences.start_bitrate_bps = -1;
                 }
             } else if (_videoContentType == VideoContentType::Screencast) {
                 preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (1020 + 32) * 1000);
@@ -3310,6 +3313,9 @@ public:
         settings.min_bitrate_bps = preferences.min_bitrate_bps;
         settings.start_bitrate_bps = preferences.start_bitrate_bps;
         settings.max_bitrate_bps = preferences.max_bitrate_bps;
+        if (preferences.start_bitrate_bps < 0) {
+            settings.start_bitrate_bps = absl::nullopt;
+        }
 
         _threads->getWorkerThread()->BlockingCall([&]() {
             _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
