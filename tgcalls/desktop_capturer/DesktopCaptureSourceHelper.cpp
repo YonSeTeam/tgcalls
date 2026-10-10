@@ -134,7 +134,7 @@ private:
     bool _configured = false;
     int _maxHeight = 0;
     std::function<DesktopCaptureLimits()> _limits;
-    std::unique_ptr<webrtc::BasicDesktopFrame> _scaled;
+    webrtc::VideoFrameBufferPool _sourcePool{ false, 1 };
     webrtc::VideoFrameBufferPool _pool{ false, 8 };
 };
 
@@ -288,45 +288,70 @@ void SourceFrameCallbackImpl::deliverScaled(
         limits.maxPixels);
     const auto width = size.width();
     const auto height = size.height();
-    if (frame.size().width() < width || frame.size().height() < height) {
+    const auto sourceWidth = frame.size().width();
+    const auto sourceHeight = frame.size().height();
+    if (sourceWidth < width || sourceHeight < height) {
         return;
-    }
-    auto data = frame.data();
-    auto stride = frame.stride();
-    const auto scale = (frame.size().width() - width >= 4)
-        || (frame.size().height() - height >= 4);
-    if (scale) {
-        if (!_scaled || !_scaled->size().equals(size)) {
-            _scaled = std::make_unique<webrtc::BasicDesktopFrame>(size);
-        }
-        libyuv::ARGBScale(
-            frame.data(),
-            frame.stride(),
-            frame.size().width(),
-            frame.size().height(),
-            _scaled->data(),
-            _scaled->stride(),
-            width,
-            height,
-            libyuv::kFilterBox);
-        data = _scaled->data();
-        stride = _scaled->stride();
     }
     const auto buffer = _pool.CreateI420Buffer(width, height);
     if (!buffer) {
         return;
     }
-    libyuv::ARGBToI420(
-        data,
-        stride,
-        buffer->MutableDataY(),
-        buffer->StrideY(),
-        buffer->MutableDataU(),
-        buffer->StrideU(),
-        buffer->MutableDataV(),
-        buffer->StrideV(),
-        width,
-        height);
+    const auto scale = (sourceWidth - width >= 4)
+        || (sourceHeight - height >= 4);
+    if (!scale) {
+        libyuv::ARGBToI420(
+            frame.data(),
+            frame.stride(),
+            buffer->MutableDataY(),
+            buffer->StrideY(),
+            buffer->MutableDataU(),
+            buffer->StrideU(),
+            buffer->MutableDataV(),
+            buffer->StrideV(),
+            width,
+            height);
+    } else {
+        // libyuv has no ARGB box filter: ARGBScale samples 2x2 pixels per
+        // output pixel and skips the rest. Its I420 planes are box filtered
+        // (every source pixel averaged) when shrinking more than 2x, and
+        // bilinear, which skips nothing, at 2x or less.
+        const auto source = _sourcePool.CreateI420Buffer(
+            sourceWidth,
+            sourceHeight);
+        if (!source) {
+            return;
+        }
+        libyuv::ARGBToI420(
+            frame.data(),
+            frame.stride(),
+            source->MutableDataY(),
+            source->StrideY(),
+            source->MutableDataU(),
+            source->StrideU(),
+            source->MutableDataV(),
+            source->StrideV(),
+            sourceWidth,
+            sourceHeight);
+        libyuv::I420Scale(
+            source->DataY(),
+            source->StrideY(),
+            source->DataU(),
+            source->StrideU(),
+            source->DataV(),
+            source->StrideV(),
+            sourceWidth,
+            sourceHeight,
+            buffer->MutableDataY(),
+            buffer->StrideY(),
+            buffer->MutableDataU(),
+            buffer->StrideU(),
+            buffer->MutableDataV(),
+            buffer->StrideV(),
+            width,
+            height,
+            libyuv::kFilterBox);
+    }
     const auto result = webrtc::VideoFrame::Builder()
         .set_video_frame_buffer(buffer)
         .set_rotation(webrtc::kVideoRotation_0)
