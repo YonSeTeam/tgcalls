@@ -335,7 +335,9 @@ GroupNetworkManager::GroupNetworkManager(
     std::function<void(uint32_t, uint8_t, bool)> audioActivityUpdated,
     bool zeroAudioLevel,
     std::function<void(uint32_t)> anyActivityUpdated,
-    std::shared_ptr<Threads> threads) :
+    std::shared_ptr<Threads> threads,
+    std::vector<RtcServer> turnServers,
+    bool relayOnly) :
 _threads(std::move(threads)),
 _stateUpdated(std::move(stateUpdated)),
 _unknownSsrcPacketReceived(std::move(unknownSsrcPacketReceived)),
@@ -343,7 +345,9 @@ _dataChannelStateUpdated(dataChannelStateUpdated),
 _dataChannelMessageReceived(dataChannelMessageReceived),
 _audioActivityUpdated(audioActivityUpdated),
 _zeroAudioLevel(zeroAudioLevel),
-_anyActivityUpdated(anyActivityUpdated) {
+_anyActivityUpdated(anyActivityUpdated),
+_turnServers(std::move(turnServers)),
+_relayOnly(relayOnly) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
     _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH), false);
@@ -395,7 +399,30 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
     portAllocator->set_flags(flags);
     portAllocator->Initialize();
 
-    portAllocator->SetConfiguration({}, {}, 2, webrtc::NO_PRUNE, _turnCustomizer.get());
+    std::vector<cricket::RelayServerConfig> turnServers;
+    for (const auto &server : _turnServers) {
+        if (!server.isTurn) {
+            continue;
+        }
+        rtc::SocketAddress address(server.host, server.port);
+        const cricket::ProtocolType proto = server.isTls ? cricket::PROTO_TLS : server.isTcp ? cricket::PROTO_TCP : cricket::PROTO_UDP;
+        if (server.isTls && !server.hostname.empty() && !address.IsUnresolvedIP()) {
+            const rtc::IPAddress ip = address.ipaddr();
+            address = rtc::SocketAddress(server.hostname, server.port);
+            address.SetResolvedIP(ip);
+        }
+        cricket::RelayServerConfig relayConfig(address, server.login, server.password, proto);
+        if (server.isTls) {
+            relayConfig.tls_cert_policy = cricket::TlsCertPolicy::TLS_CERT_POLICY_INSECURE_NO_CHECK;
+        }
+        turnServers.push_back(std::move(relayConfig));
+    }
+    // YonSeGram: relay-only keeps the SFU from ever seeing this device's own address.
+    if (_relayOnly && !turnServers.empty()) {
+        portAllocator->SetCandidateFilter(cricket::CF_RELAY);
+    }
+
+    portAllocator->SetConfiguration({}, turnServers, 2, webrtc::NO_PRUNE, _turnCustomizer.get());
 
     webrtc::IceTransportInit iceTransportInit;
     iceTransportInit.set_port_allocator(portAllocator.get());

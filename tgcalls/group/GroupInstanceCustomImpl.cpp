@@ -2103,6 +2103,8 @@ public:
     _enableSystemMute(descriptor.ios_enableSystemMute),
 #endif
     _isConference(descriptor.isConference),
+    _turnServers(std::move(descriptor.turnServers)),
+    _relayOnly(descriptor.relayOnly),
     _minOutgoingVideoBitrateKbit(descriptor.minOutgoingVideoBitrateKbit),
     _videoContentType(descriptor.videoContentType),
     _videoCodecPreferences(std::move(descriptor.videoCodecPreferences)),
@@ -2183,7 +2185,7 @@ public:
 
         bool takeAudioLevelFromNetwork = _e2eEncryptDecrypt == nullptr;
 
-        _networkManager.reset(new ThreadLocalObject<GroupNetworkManager>(_threads->getNetworkThread(), [weak, threads = _threads, takeAudioLevelFromNetwork] () mutable {
+        _networkManager.reset(new ThreadLocalObject<GroupNetworkManager>(_threads->getNetworkThread(), [weak, threads = _threads, takeAudioLevelFromNetwork, turnServers = _turnServers, relayOnly = _relayOnly] () mutable {
             return std::make_shared<GroupNetworkManager>(
                 fieldTrialsBasedConfig,
                 [=](const GroupNetworkManager::State &state) {
@@ -2233,7 +2235,7 @@ public:
                             strong->updateSsrcActivity(ssrc);
                         }
                     });
-                }, threads);
+                }, threads, turnServers, relayOnly);
         }));
 
     #if USE_RNNOISE
@@ -4413,6 +4415,8 @@ private:
     bool _enableSystemMute{false};
 #endif
     bool _isConference{false};
+    std::vector<RtcServer> _turnServers;
+    bool _relayOnly{false};
     int _minOutgoingVideoBitrateKbit{100};
     VideoContentType _videoContentType{VideoContentType::None};
     std::vector<VideoCodecName> _videoCodecPreferences;

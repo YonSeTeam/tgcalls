@@ -18,6 +18,7 @@
 #include <functional>
 #include <memory>
 
+#include "Instance.h"
 #include "Message.h"
 #include "ThreadLocalObject.h"
 
@@ -66,7 +67,9 @@ public:
         std::function<void(uint32_t, uint8_t, bool)> audioActivityUpdated,
         bool zeroAudioLevel,
         std::function<void(uint32_t)> anyActivityUpdated,
-        std::shared_ptr<Threads> threads);
+        std::shared_ptr<Threads> threads,
+        std::vector<RtcServer> turnServers,
+        bool relayOnly);
     ~GroupNetworkManager();
 
     void start();
@@ -108,6 +111,8 @@ private:
     std::function<void(uint32_t, uint8_t, bool)> _audioActivityUpdated;
     bool _zeroAudioLevel = false;
     std::function<void(uint32_t)> _anyActivityUpdated;
+    std::vector<RtcServer> _turnServers;
+    bool _relayOnly = false;
 
     std::unique_ptr<rtc::NetworkMonitorFactory> _networkMonitorFactory;
     std::unique_ptr<rtc::BasicPacketSocketFactory> _socketFactory;
