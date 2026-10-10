@@ -3241,6 +3241,13 @@ public:
                 codecPriorities.push_back(name);
             }
         }
+        if (_videoContentType == VideoContentType::Screencast) {
+            // YonSeGram: the VP9 screen sharing mode caps the frame rate at
+            // 5 fps for one layer and 10 fps for two, so it goes last.
+            std::stable_partition(codecPriorities.begin(), codecPriorities.end(), [](std::string const &name) {
+                return name != cricket::kVp9CodecName;
+            });
+        }
 
         for (const auto &codecName : codecPriorities) {
             if (_selectedPayloadType) {
