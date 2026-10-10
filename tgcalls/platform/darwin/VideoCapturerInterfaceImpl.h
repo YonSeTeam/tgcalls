@@ -27,6 +27,7 @@ public:
     void setUncroppedOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
     void setOnFatalError(std::function<void()> error) override;
     void setOnPause(std::function<void(bool)> pause) override;
+    void setScreencastQuality(ScreencastQuality const &quality) override;
     int getRotation() override;
 
     id getInternalReference();

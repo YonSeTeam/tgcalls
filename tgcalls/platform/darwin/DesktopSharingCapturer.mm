@@ -110,6 +110,10 @@ private:
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio {
 }
 
+- (void)setScreencastMaxHeight:(int)maxHeight fps:(double)fps {
+    renderer->setQuality(maxHeight, fps, nullptr);
+}
+
 - (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame> >)sink {
     renderer->setSecondaryOutput(sink);
 }

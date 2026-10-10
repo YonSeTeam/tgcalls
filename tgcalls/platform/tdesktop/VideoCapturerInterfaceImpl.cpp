@@ -9,6 +9,8 @@
 
 #include "pc/video_track_source_proxy.h"
 
+#include <limits>
+
 namespace tgcalls {
 namespace {
 
@@ -20,6 +22,14 @@ std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> GetSink(
 	const auto internal = static_cast<VideoCapturerTrackSource*>(
 		proxy->internal());
 	return internal->sink();
+}
+
+VideoCapturerTrackSource *GetTrackSource(
+	const rtc::scoped_refptr<
+		webrtc::VideoTrackSourceInterface> &nativeSource) {
+	const auto proxy = static_cast<webrtc::VideoTrackSourceProxy*>(
+		nativeSource.get());
+	return static_cast<VideoCapturerTrackSource*>(proxy->internal());
 }
 
 } // namespace
@@ -128,6 +138,26 @@ void VideoCapturerInterfaceImpl::setOnFatalError(std::function<void()> error) {
 	if (_cameraCapturer) {
 		_cameraCapturer->setOnFatalError(std::move(error));
 	}
+}
+
+void VideoCapturerInterfaceImpl::setScreencastQuality(
+		ScreencastQuality const &quality) {
+#ifndef TGCALLS_UWP_DESKTOP
+	if (!_desktopCapturer) {
+		return;
+	}
+	const auto source = _source;
+	_desktopCapturer->setQuality(quality.maxHeight, quality.fps, [=] {
+		const auto wants = GetTrackSource(source)->wants();
+		const auto limit = [](int value) {
+			return (value < std::numeric_limits<int>::max()) ? value : 0;
+		};
+		return DesktopCaptureLimits{
+			limit(wants.max_pixel_count),
+			limit(wants.max_framerate_fps),
+		};
+	});
+#endif // TGCALLS_UWP_DESKTOP
 }
 
 void VideoCapturerInterfaceImpl::setOnPause(std::function<void(bool)> pause) {

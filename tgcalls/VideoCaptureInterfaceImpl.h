@@ -30,6 +30,10 @@ public:
     webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source();
     int getRotation();
     bool isScreenCapture();
+    // YonSeGram: the instance sending this capture applies the encoding part.
+    void setScreencastQuality(ScreencastQuality quality);
+    std::optional<ScreencastQuality> screencastQuality() const;
+    void setScreencastQualityUpdated(std::function<void()> updated);
 
 private:
     void updateAspectRateAdaptation();
@@ -48,6 +52,8 @@ private:
     float _preferredAspectRatio = 0.0f;
     bool _shouldBeAdaptedToReceiverAspectRate = true;
     bool _isScreenCapture = false;
+    std::optional<ScreencastQuality> _screencastQuality;
+    std::function<void()> _screencastQualityUpdated;
 };
 
 class VideoCaptureInterfaceImpl : public VideoCaptureInterface {
@@ -63,6 +69,7 @@ public:
     void setOnFatalError(std::function<void()> error) override;
     void setOnPause(std::function<void(bool)> pause) override;
     void setOnIsActiveUpdated(std::function<void(bool)> onIsActiveUpdated) override;
+    void setScreencastQuality(ScreencastQuality quality) override;
 
 	ThreadLocalObject<VideoCaptureInterfaceObject> *object();
 

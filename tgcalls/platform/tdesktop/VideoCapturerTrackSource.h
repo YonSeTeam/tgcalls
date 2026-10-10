@@ -17,6 +17,8 @@ public:
 	VideoCapturerTrackSource();
 
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink();
+	// YonSeGram: lets the screen capturer follow the encoder adaptation.
+	rtc::VideoSinkWants wants() const;
 
 private:
 	rtc::VideoSourceInterface<webrtc::VideoFrame> *source() override;

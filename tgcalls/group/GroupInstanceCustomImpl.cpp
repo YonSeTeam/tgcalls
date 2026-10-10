@@ -1825,6 +1825,14 @@ public:
         _requestedMaxQuality = quality;
     }
 
+    int requestedMaxHeight() const {
+        return _requestedMaxHeight;
+    }
+
+    void setRequestedMaxHeight(int height) {
+        _requestedMaxHeight = height;
+    }
+
     void setStats(absl::optional<GroupInstanceStats::IncomingVideoStats> stats) {
         _stats = stats;
     }
@@ -1853,6 +1861,7 @@ private:
 
     VideoChannelDescription::Quality _requestedMinQuality = VideoChannelDescription::Quality::Thumbnail;
     VideoChannelDescription::Quality _requestedMaxQuality = VideoChannelDescription::Quality::Thumbnail;
+    int _requestedMaxHeight = 0;
 
     absl::optional<GroupInstanceStats::IncomingVideoStats> _stats;
 };
@@ -2356,6 +2365,7 @@ public:
         if (_getVideoSource) {
             setVideoSource(_getVideoSource, true);
         }
+        watchScreencastQuality();
 
         if (_useDummyChannel && _videoContentType != VideoContentType::Screencast) {
             addIncomingAudioChannel(ChannelId(1), true);
@@ -2520,7 +2530,9 @@ public:
             outgoingVideoCodecs.push_back(_selectedPayloadType->rtxCodec.value());
         }
         outgoingVideoDescription->set_codecs(outgoingVideoCodecs);
-        outgoingVideoDescription->set_bandwidth(1300000);
+        // YonSeGram: with client screen sharing settings the encodings cap the bitrate.
+        const auto videoBandwidth = screencastQuality() ? -1 : 1300000;
+        outgoingVideoDescription->set_bandwidth(videoBandwidth);
         outgoingVideoDescription->AddStream(videoSendStreamParams);
 
         auto incomingVideoDescription = std::make_unique<cricket::VideoContentDescription>();
@@ -2531,7 +2543,7 @@ public:
         incomingVideoDescription->set_rtcp_reduced_size(true);
         incomingVideoDescription->set_direction(webrtc::RtpTransceiverDirection::kRecvOnly);
         incomingVideoDescription->set_codecs(outgoingVideoCodecs);
-        incomingVideoDescription->set_bandwidth(1300000);
+        incomingVideoDescription->set_bandwidth(videoBandwidth);
 
         _threads->getWorkerThread()->BlockingCall([&]() {
             std::string errorDesc;
@@ -2550,12 +2562,78 @@ public:
         updateVideoSend();
     }
 
+    // YonSeGram: the quality the client set on the shared screen, if any.
+    std::optional<ScreencastQuality> screencastQuality() {
+        if (_videoContentType != VideoContentType::Screencast || !_videoCapture) {
+            return std::nullopt;
+        }
+        const auto impl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
+        return impl ? impl->screencastQuality() : std::nullopt;
+    }
+
+    // YonSeGram: the half size layer gets a share that keeps it readable.
+    static int screencastLowLayerBitrate(int fullBitrate) {
+        return std::max(fullBitrate * 3 / 10, 300000);
+    }
+
+    void watchScreencastQuality() {
+        if (_videoContentType != VideoContentType::Screencast || !_videoCapture) {
+            return;
+        }
+        const auto impl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
+        if (!impl) {
+            return;
+        }
+        const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
+        const auto capture = std::weak_ptr<VideoCaptureInterface>(_videoCapture);
+        impl->setScreencastQualityUpdated([threads = _threads, weak, capture] {
+            threads->getMediaThread()->PostTask([=] {
+                const auto strong = weak.lock();
+                if (!strong || strong->_videoCapture != capture.lock()) {
+                    return;
+                }
+                strong->adjustVideoSendParams();
+                strong->adjustBitratePreferences(false);
+            });
+        });
+    }
+
+    void adjustScreencastSendParams(ScreencastQuality const &quality) {
+        const auto fullBitrate = (quality.maxBitrateKbps > 0)
+            ? quality.maxBitrateKbps * 1000
+            : (800000 + 100000) * 2;
+        const auto minBitrate = std::min(300000, fullBitrate);
+        _threads->getWorkerThread()->BlockingCall([&]() {
+            webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->send_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
+            const auto count = int(rtpParameters.encodings.size());
+            for (int i = 0; i < count; i++) {
+                auto &encoding = rtpParameters.encodings[i];
+                encoding.max_framerate = double(std::max(quality.fps, 1));
+                if (i + 1 < count) {
+                    const auto low = screencastLowLayerBitrate(fullBitrate);
+                    encoding.min_bitrate_bps = std::min(100000, low);
+                    encoding.max_bitrate_bps = low;
+                    encoding.scale_resolution_down_by = (count == 2) ? 2.0 : double(1 << (count - 1 - i));
+                } else {
+                    encoding.min_bitrate_bps = minBitrate;
+                    encoding.max_bitrate_bps = fullBitrate;
+                }
+            }
+            rtpParameters.degradation_preference = quality.preferMotion
+                ? webrtc::DegradationPreference::MAINTAIN_FRAMERATE
+                : webrtc::DegradationPreference::MAINTAIN_RESOLUTION;
+            _outgoingVideoChannel->send_channel()->SetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, rtpParameters);
+        });
+    }
+
     void adjustVideoSendParams() {
         if (!_outgoingVideoChannel) {
             return;
         }
 
-        if (_videoContentType == VideoContentType::Screencast) {
+        if (const auto quality = screencastQuality()) {
+            adjustScreencastSendParams(*quality);
+        } else if (_videoContentType == VideoContentType::Screencast) {
             _threads->getWorkerThread()->BlockingCall([this]() {
                 webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->send_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
                 if (rtpParameters.encodings.size() == 3) {
@@ -3181,7 +3259,19 @@ public:
             if (resetStartBitrate) {
                 preferences.start_bitrate_bps = std::max(preferences.min_bitrate_bps, 400 * 1000);
             }
-            if (_videoContentType == VideoContentType::Screencast) {
+            if (const auto quality = screencastQuality()) {
+                const auto fullBitrate = (quality->maxBitrateKbps > 0)
+                    ? quality->maxBitrateKbps * 1000
+                    : (800000 + 100000) * 2;
+                const auto layers = int(_outgoingVideoSsrcs.simulcastLayers.size());
+                const auto total = fullBitrate
+                    + ((layers > 1) ? screencastLowLayerBitrate(fullBitrate) : 0)
+                    + _outgoingAudioBitrateKbit * 1000;
+                preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, total);
+                if (resetStartBitrate) {
+                    preferences.start_bitrate_bps = std::max(preferences.min_bitrate_bps, std::min(1000 * 1000, total));
+                }
+            } else if (_videoContentType == VideoContentType::Screencast) {
                 preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (1020 + 32) * 1000);
             } else {
                 preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (1020 + 32) * 1000);
@@ -3550,7 +3640,8 @@ public:
             switch (incomingVideoChannel.second->requestedMaxQuality()) {
                 case VideoChannelDescription::Quality::Full: {
                     onStageEndpoints.push_back(json11::Json(incomingVideoChannel.first.endpointId));
-                    selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(720)));
+                    const auto requested = incomingVideoChannel.second->requestedMaxHeight();
+                    selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(requested > 0 ? requested : 720)));
                     break;
                 }
                 case VideoChannelDescription::Quality::Medium: {
@@ -3794,6 +3885,10 @@ public:
     void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, bool isInitializing) {
         _videoCapture = videoCapture;
         setVideoSource(videoCaptureToGetVideoSource(std::move(videoCapture)), isInitializing);
+        watchScreencastQuality();
+        if (screencastQuality()) {
+            adjustVideoSendParams();
+        }
     }
 
     void setAudioOutputDevice(const std::string &id) {
@@ -4265,15 +4360,20 @@ public:
 
             auto current = _incomingVideoChannels.find(VideoChannelId(videoInformation.endpointId));
             if (current != _incomingVideoChannels.end()) {
-                if (current->second->requestedMinQuality() != description.minQuality || current->second->requestedMaxQuality() != description.maxQuality) {
+                if (current->second->requestedMinQuality() != description.minQuality || current->second->requestedMaxQuality() != description.maxQuality || current->second->requestedMaxHeight() != description.maxHeight) {
                     current->second->setRequstedMinQuality(description.minQuality);
                     current->second->setRequstedMaxQuality(description.maxQuality);
+                    current->second->setRequestedMaxHeight(description.maxHeight);
                     updated = true;
                 }
                 continue;
             }
 
             addIncomingVideoChannel(description.audioSsrc, description.userId, videoInformation, description.minQuality, description.maxQuality);
+            const auto added = _incomingVideoChannels.find(VideoChannelId(videoInformation.endpointId));
+            if (added != _incomingVideoChannels.end()) {
+                added->second->setRequestedMaxHeight(description.maxHeight);
+            }
             updated = true;
         }
 

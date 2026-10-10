@@ -445,13 +445,15 @@ public:
         webrtc::VideoBitrateAllocatorFactory *videoBitrateAllocatorFactory,
         std::function<void()> rotationUpdated,
         signaling::MediaContent const &mediaContent,
-        bool isScreencast
+        bool isScreencast,
+        std::string const &preferredCodec = std::string()
     ) :
     _threads(threads),
     _mainSsrc(mediaContent.ssrc),
     _call(call),
     _channelManager(channelManager),
-    _rotationUpdated(rotationUpdated) {
+    _rotationUpdated(rotationUpdated),
+    _isScreencast(isScreencast) {
         cricket::VideoOptions videoOptions;
         videoOptions.is_screencast = isScreencast;
 
@@ -478,6 +480,11 @@ public:
 #endif
             cricket::kH264CodecName
         };
+        // YonSeGram: the codec chosen for screen sharing goes first.
+        if (!preferredCodec.empty()) {
+            codecPreferences.erase(std::remove(codecPreferences.begin(), codecPreferences.end(), preferredCodec), codecPreferences.end());
+            codecPreferences.insert(codecPreferences.begin(), preferredCodec);
+        }
 
         std::vector<cricket::VideoCodec> codecs;
         for (const auto &name : codecPreferences) {
@@ -610,6 +617,23 @@ public:
                 });
             });
 
+            if (_isScreencast) {
+                applyScreencastQuality(videoCaptureImpl->screencastQuality());
+                const auto capture = std::weak_ptr<VideoCaptureInterface>(_videoCapture);
+                videoCaptureImpl->setScreencastQualityUpdated([threads = _threads, weak, capture] {
+                    threads->getMediaThread()->PostTask([=] {
+                        const auto strong = weak.lock();
+                        const auto current = capture.lock();
+                        if (!strong || !current || strong->_videoCapture != current) {
+                            return;
+                        }
+                        if (const auto impl = GetVideoCaptureAssumingSameThread(current.get())) {
+                            strong->applyScreencastQuality(impl->screencastQuality());
+                        }
+                    });
+                });
+            }
+
             switch (videoCaptureImpl->getRotation()) {
                 case 0: {
                     _videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation0;
@@ -663,6 +687,28 @@ public:
         });
     }
 
+    // YonSeGram: limits and degradation chosen for a shared screen.
+    void applyScreencastQuality(std::optional<ScreencastQuality> const &quality) {
+        if (!quality) {
+            return;
+        }
+        _threads->getWorkerThread()->BlockingCall([&]() {
+            webrtc::RtpParameters parameters = _outgoingVideoChannel->send_channel()->GetRtpSendParameters(_mainSsrc);
+            if (parameters.encodings.empty()) {
+                parameters.encodings.push_back(webrtc::RtpEncodingParameters());
+            }
+            auto &encoding = parameters.encodings[0];
+            encoding.max_framerate = double(std::max(quality->fps, 1));
+            encoding.max_bitrate_bps = (quality->maxBitrateKbps > 0)
+                ? absl::optional<int>(quality->maxBitrateKbps * 1000)
+                : absl::nullopt;
+            parameters.degradation_preference = quality->preferMotion
+                ? webrtc::DegradationPreference::MAINTAIN_FRAMERATE
+                : webrtc::DegradationPreference::MAINTAIN_RESOLUTION;
+            _outgoingVideoChannel->send_channel()->SetRtpSendParameters(_mainSsrc, parameters);
+        });
+    }
+
 public:
     std::shared_ptr<VideoCaptureInterface> videoCapture() {
         return _videoCapture;
@@ -689,6 +735,7 @@ private:
 
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
     signaling::MediaStateMessage::VideoRotation _videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation0;
+    bool _isScreencast = false;
 };
 
 class VideoSinkImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
@@ -1468,7 +1515,8 @@ public:
                                 });
                             },
                             outgoingScreencastContent.value(),
-                            true
+                            true,
+                            screencastCodec()
                         ));
 
                         if (_screencastCapture) {
@@ -2016,6 +2064,13 @@ public:
             adjustBitratePreferences(true);
             createNegotiatedChannels();
         }
+    }
+
+    // YonSeGram: the screencast codec the client asked for, if any.
+    std::string screencastCodec() {
+        const auto impl = GetVideoCaptureAssumingSameThread(_screencastCapture.get());
+        const auto quality = impl ? impl->screencastQuality() : std::nullopt;
+        return quality ? quality->codec : std::string();
     }
 
     void setRequestedVideoAspect(float aspect) {

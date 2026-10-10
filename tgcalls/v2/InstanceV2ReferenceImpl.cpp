@@ -1555,8 +1555,12 @@ public:
         _outgoingVideoTransceiver = nullptr;
 
         auto videoCaptureImpl = GetVideoCaptureAssumingSameThread(videoCapture.get());
+        // YonSeGram: a shared screen with client settings goes out on the camera track.
+        const auto screencastQuality = (videoCaptureImpl && videoCaptureImpl->isScreenCapture())
+            ? videoCaptureImpl->screencastQuality()
+            : std::nullopt;
         if (videoCaptureImpl) {
-            if (videoCaptureImpl->isScreenCapture()) {
+            if (videoCaptureImpl->isScreenCapture() && !screencastQuality) {
             } else {
                 _videoCapture = videoCapture;
 
@@ -1581,6 +1585,10 @@ public:
                             #endif
                             cricket::kH264CodecName
                         };
+                        if (screencastQuality && !screencastQuality->codec.empty()) {
+                            codecPreferences.erase(std::remove(codecPreferences.begin(), codecPreferences.end(), screencastQuality->codec), codecPreferences.end());
+                            codecPreferences.insert(codecPreferences.begin(), screencastQuality->codec);
+                        }
 
                         for (const auto &codecCapability : currentCapabilities.codecs) {
                             if (std::find_if(codecPreferences.begin(), codecPreferences.end(), [&](std::string const &value) {
@@ -1611,6 +1619,26 @@ public:
                         parameters.encodings[0].max_bitrate_bps = 1200 * 1024;
                         _outgoingVideoTransceiver->sender()->SetParameters(parameters);
 
+                        if (screencastQuality) {
+                            applyScreencastQuality(*screencastQuality);
+                            const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
+                            const auto capture = std::weak_ptr<VideoCaptureInterface>(videoCapture);
+                            videoCaptureImpl->setScreencastQualityUpdated([threads = _threads, weak, capture] {
+                                threads->getMediaThread()->PostTask([=] {
+                                    const auto strong = weak.lock();
+                                    const auto current = capture.lock();
+                                    if (!strong || !current || strong->_videoCapture != current) {
+                                        return;
+                                    }
+                                    const auto impl = GetVideoCaptureAssumingSameThread(current.get());
+                                    const auto quality = impl ? impl->screencastQuality() : std::nullopt;
+                                    if (quality) {
+                                        strong->applyScreencastQuality(*quality);
+                                    }
+                                });
+                            });
+                        }
+
                         _outgoingVideoTrack->set_enabled(true);
                     }
                 }
@@ -1623,6 +1651,29 @@ public:
             sendMediaState();
             sendLocalDescription();
         }
+    }
+
+    // YonSeGram: limits, degradation and content hint chosen for a shared screen.
+    void applyScreencastQuality(ScreencastQuality const &quality) {
+        if (!_outgoingVideoTransceiver || !_outgoingVideoTrack) {
+            return;
+        }
+        _outgoingVideoTrack->set_content_hint(quality.preferMotion
+            ? webrtc::VideoTrackInterface::ContentHint::kFluid
+            : webrtc::VideoTrackInterface::ContentHint::kDetailed);
+        webrtc::RtpParameters parameters = _outgoingVideoTransceiver->sender()->GetParameters();
+        if (parameters.encodings.empty()) {
+            parameters.encodings.push_back(webrtc::RtpEncodingParameters());
+        }
+        auto &encoding = parameters.encodings[0];
+        encoding.max_framerate = double(std::max(quality.fps, 1));
+        encoding.max_bitrate_bps = (quality.maxBitrateKbps > 0)
+            ? absl::optional<int>(quality.maxBitrateKbps * 1000)
+            : absl::optional<int>(1200 * 1024);
+        parameters.degradation_preference = quality.preferMotion
+            ? webrtc::DegradationPreference::MAINTAIN_FRAMERATE
+            : webrtc::DegradationPreference::MAINTAIN_RESOLUTION;
+        _outgoingVideoTransceiver->sender()->SetParameters(parameters);
     }
 
     void setRequestedVideoAspect(float aspect) {
