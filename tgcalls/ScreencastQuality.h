@@ -19,9 +19,14 @@ struct ScreencastQuality {
     // Under pressure keep the frame rate and lower the resolution, instead of
     // keeping the resolution and lowering the frame rate.
     bool preferMotion = false;
-    // "VP8", "VP9", "H264" or "H265", tried first when both sides have it.
+    // "VP8", "H264" or "H265", tried first in private calls when both sides
+    // have it. VP9 is never put first for a shared screen.
     std::string codec;
 };
+
+// YonSeGram: whether private calls on this platform have an encoder for the
+// codec, by its SDP name ("H265", ...).
+bool HasVideoEncoder(std::string const &codecName);
 
 // YonSeGram: one video stream as the client stats overlay shows it.
 struct VideoStreamStats {
