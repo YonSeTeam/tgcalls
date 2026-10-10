@@ -1,6 +1,7 @@
 #ifndef TGCALLS_SCREENCAST_QUALITY_H
 #define TGCALLS_SCREENCAST_QUALITY_H
 
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -20,6 +21,26 @@ struct ScreencastQuality {
     bool preferMotion = false;
     // "VP8", "VP9", "H264" or "H265", tried first when both sides have it.
     std::string codec;
+};
+
+// YonSeGram: one video stream as the client stats overlay shows it.
+struct VideoStreamStats {
+    int width = 0;
+    int height = 0;
+    int fps = 0;
+    // Payload bytes so far, the client turns two readings into a bitrate.
+    int64_t bytes = 0;
+    std::string codec;
+};
+
+// YonSeGram: candidate types are ICE ones: "host", "srflx", "prflx", "relay".
+struct VideoStatsSnapshot {
+    std::optional<VideoStreamStats> outgoing;
+    std::optional<VideoStreamStats> incoming;
+    std::string localCandidateType;
+    std::string localAddress;
+    std::string remoteCandidateType;
+    std::string remoteAddress;
 };
 
 } // namespace tgcalls

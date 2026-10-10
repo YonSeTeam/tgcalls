@@ -1841,6 +1841,29 @@ public:
         return _stats;
     }
 
+    // YonSeGram: what the stats overlay shows for this stream.
+    std::optional<VideoStreamStats> videoStats() {
+        std::optional<VideoStreamStats> result;
+        _threads->getWorkerThread()->BlockingCall([&]() {
+            cricket::VideoMediaReceiveInfo info;
+            if (!_videoChannel->receive_channel()->GetStats(&info)) {
+                return;
+            }
+            for (const auto &receiver : info.receivers) {
+                if (receiver.frame_width > (result ? result->width : 0)) {
+                    result = VideoStreamStats{
+                        receiver.frame_width,
+                        receiver.frame_height,
+                        receiver.framerate_decoded,
+                        receiver.payload_bytes_received,
+                        receiver.codec_name,
+                    };
+                }
+            }
+        });
+        return result;
+    }
+
 private:
     void OnSentPacket_w(const rtc::SentPacket& sent_packet) {
         //_call->OnSentPacket(sent_packet);
@@ -4401,6 +4424,44 @@ public:
         }
     }
 
+    void getVideoStats(std::string const &endpointId, std::function<void(VideoStatsSnapshot)> completion) {
+        auto result = VideoStatsSnapshot();
+        if (_outgoingVideoChannel && _getVideoSource) {
+            _threads->getWorkerThread()->BlockingCall([&]() {
+                cricket::VideoMediaSendInfo info;
+                if (!_outgoingVideoChannel->send_channel()->GetStats(&info)) {
+                    return;
+                }
+                const auto &senders = info.aggregated_senders.empty() ? info.senders : info.aggregated_senders;
+                if (senders.empty() || senders.front().send_frame_width <= 0) {
+                    return;
+                }
+                const auto &sender = senders.front();
+                result.outgoing = VideoStreamStats{
+                    sender.send_frame_width,
+                    sender.send_frame_height,
+                    sender.framerate_sent,
+                    sender.payload_bytes_sent,
+                    sender.codec_name,
+                };
+            });
+        }
+        if (!endpointId.empty()) {
+            const auto i = _incomingVideoChannels.find(VideoChannelId(endpointId));
+            if (i != _incomingVideoChannels.end()) {
+                result.incoming = i->second->videoStats();
+            }
+        }
+        _networkManager->perform([result = std::move(result), completion](GroupNetworkManager *networkManager) mutable {
+            const auto route = networkManager->selectedRoute();
+            result.localCandidateType = route.localType;
+            result.localAddress = route.localAddress;
+            result.remoteCandidateType = route.remoteType;
+            result.remoteAddress = route.remoteAddress;
+            completion(std::move(result));
+        });
+    }
+
     void getStats(std::function<void(GroupInstanceStats)> completion) {
         GroupInstanceStats result;
 
@@ -4747,6 +4808,12 @@ void GroupInstanceCustomImpl::setRequestedVideoChannels(std::vector<VideoChannel
 void GroupInstanceCustomImpl::getStats(std::function<void(GroupInstanceStats)> completion) {
     _internal->perform([completion = std::move(completion)](GroupInstanceCustomInternal *internal) mutable {
         internal->getStats(completion);
+    });
+}
+
+void GroupInstanceCustomImpl::getVideoStats(std::string const &endpointId, std::function<void(VideoStatsSnapshot)> completion) {
+    _internal->perform([endpointId, completion = std::move(completion)](GroupInstanceCustomInternal *internal) mutable {
+        internal->getVideoStats(endpointId, completion);
     });
 }
 

@@ -46,6 +46,8 @@ public:
     void setRequestedVideoChannels(std::vector<VideoChannelDescription> &&requestedVideoChannels);
 
     void getStats(std::function<void(GroupInstanceStats)> completion);
+    // YonSeGram: the sent stream, one received endpoint and the ICE pair.
+    void getVideoStats(std::string const &endpointId, std::function<void(VideoStatsSnapshot)> completion);
     void internal_addCustomNetworkEvent(bool isRemoteConnected);
 
 private:

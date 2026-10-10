@@ -82,6 +82,15 @@ public:
 
     webrtc::RtpTransport *getRtpTransport();
 
+    // YonSeGram: the selected ICE pair, for the client stats overlay.
+    struct SelectedRoute {
+        std::string localType;
+        std::string localAddress;
+        std::string remoteType;
+        std::string remoteAddress;
+    };
+    SelectedRoute selectedRoute() const;
+
 private:
     void resetDtlsSrtpTransport();
     void restartDataChannel();

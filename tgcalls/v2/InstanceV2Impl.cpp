@@ -709,6 +709,30 @@ public:
         });
     }
 
+    // YonSeGram: what the stats overlay shows for this stream.
+    std::optional<VideoStreamStats> stats() {
+        std::optional<VideoStreamStats> result;
+        _threads->getWorkerThread()->BlockingCall([&]() {
+            cricket::VideoMediaSendInfo info;
+            if (!_outgoingVideoChannel->send_channel()->GetStats(&info)) {
+                return;
+            }
+            const auto &senders = info.aggregated_senders.empty() ? info.senders : info.aggregated_senders;
+            if (senders.empty()) {
+                return;
+            }
+            const auto &sender = senders.front();
+            result = VideoStreamStats{
+                sender.send_frame_width,
+                sender.send_frame_height,
+                sender.framerate_sent,
+                sender.payload_bytes_sent,
+                sender.codec_name,
+            };
+        });
+        return result;
+    }
+
 public:
     std::shared_ptr<VideoCaptureInterface> videoCapture() {
         return _videoCapture;
@@ -888,6 +912,29 @@ public:
 
     uint32_t ssrc() const {
         return _mainVideoSsrc;
+    }
+
+    // YonSeGram: what the stats overlay shows for this stream.
+    std::optional<VideoStreamStats> stats() {
+        std::optional<VideoStreamStats> result;
+        _threads->getWorkerThread()->BlockingCall([&]() {
+            cricket::VideoMediaReceiveInfo info;
+            if (!_videoChannel->receive_channel()->GetStats(&info) || info.receivers.empty()) {
+                return;
+            }
+            const auto &receiver = info.receivers.front();
+            if (receiver.frame_width <= 0) {
+                return;
+            }
+            result = VideoStreamStats{
+                receiver.frame_width,
+                receiver.frame_height,
+                receiver.framerate_decoded,
+                receiver.payload_bytes_received,
+                receiver.codec_name,
+            };
+        });
+        return result;
     }
 
 private:
@@ -2073,6 +2120,30 @@ public:
         return quality ? quality->codec : std::string();
     }
 
+    // YonSeGram: the sent and the shown stream, and the selected ICE pair.
+    void getVideoStats(std::function<void(VideoStatsSnapshot)> completion) {
+        VideoStatsSnapshot result;
+        if (_outgoingScreencastChannel && _outgoingScreencastChannel->videoCapture()) {
+            result.outgoing = _outgoingScreencastChannel->stats();
+        } else if (_outgoingVideoChannel && _outgoingVideoChannel->videoCapture()) {
+            result.outgoing = _outgoingVideoChannel->stats();
+        }
+        if (_incomingScreencastChannel) {
+            result.incoming = _incomingScreencastChannel->stats();
+        }
+        if (!result.incoming && _incomingVideoChannel) {
+            result.incoming = _incomingVideoChannel->stats();
+        }
+        if (_networkState && _networkState->connection) {
+            const auto &connection = _networkState->connection.value();
+            result.localCandidateType = connection.local.type;
+            result.localAddress = connection.local.address;
+            result.remoteCandidateType = connection.remote.type;
+            result.remoteAddress = connection.remote.address;
+        }
+        completion(std::move(result));
+    }
+
     void setRequestedVideoAspect(float aspect) {
     }
 
@@ -2350,6 +2421,12 @@ void InstanceV2Impl::receiveSignalingData(const std::vector<uint8_t> &data) {
 void InstanceV2Impl::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
     _internal->perform([videoCapture](InstanceV2ImplInternal *internal) {
         internal->setVideoCapture(videoCapture);
+    });
+}
+
+void InstanceV2Impl::getVideoStats(std::function<void(VideoStatsSnapshot)> completion) {
+    _internal->perform([completion](InstanceV2ImplInternal *internal) {
+        internal->getVideoStats(completion);
     });
 }
 

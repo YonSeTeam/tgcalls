@@ -549,6 +549,18 @@ webrtc::RtpTransport *GroupNetworkManager::getRtpTransport() {
     return _dtlsSrtpTransport.get();
 }
 
+GroupNetworkManager::SelectedRoute GroupNetworkManager::selectedRoute() const {
+    auto result = SelectedRoute();
+    const auto connection = _transportChannel ? _transportChannel->selected_connection() : nullptr;
+    if (connection) {
+        result.localType = connection->local_candidate().type();
+        result.localAddress = connection->local_candidate().address().ToString();
+        result.remoteType = connection->remote_candidate().type();
+        result.remoteAddress = connection->remote_candidate().address().ToString();
+    }
+    return result;
+}
+
 void GroupNetworkManager::checkConnectionTimeout() {
     const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
     _threads->getNetworkThread()->PostDelayedTask([weak]() {

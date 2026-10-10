@@ -9,6 +9,7 @@
 #include <map>
 
 #include "Stats.h"
+#include "ScreencastQuality.h"
 #include "DirectConnectionChannel.h"
 
 namespace rtc {
@@ -215,6 +216,10 @@ public:
 	virtual void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) = 0;
 	virtual void sendVideoDeviceUpdated() = 0;
     virtual void setRequestedVideoAspect(float aspect) = 0;
+    // YonSeGram: stats for the client overlay, called back on a call thread.
+    virtual void getVideoStats(std::function<void(VideoStatsSnapshot)> completion) {
+        completion(VideoStatsSnapshot());
+    }
 
 	virtual void stop(std::function<void(FinalState)> completion) = 0;
 
