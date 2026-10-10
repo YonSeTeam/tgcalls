@@ -718,7 +718,7 @@ public:
         for (auto &server : _rtcServers) {
             // YonSeGram: TCP and TLS fallback routes make sense only for relays and only when
             // allowed; otherwise only UDP addresses are taken, as upstream does.
-            if (server.isTcp && !(_relayTcpTls && server.isTurn)) {
+            if (server.isTcp && !((_relayTcpTls || server.isExternal) && server.isTurn)) {
                 continue;
             }
 
@@ -769,6 +769,7 @@ public:
                     // certificate chain against. TLS does not protect the media here (it is encrypted
                     // higher up the stack); it only makes the traffic look like HTTPS.
                     mappedServer.tls_cert_policy = webrtc::PeerConnectionInterface::TlsCertPolicy::kTlsCertPolicyInsecureNoCheck;
+                    mappedServer.hostname = server.hostname;
                 }
 
                 peerConnectionConfiguration.servers.push_back(mappedServer);

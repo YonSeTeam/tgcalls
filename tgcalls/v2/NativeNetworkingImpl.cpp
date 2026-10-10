@@ -617,8 +617,15 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
             } else if (server.isTcp) {
                 proto = cricket::PROTO_TCP;
             }
+            rtc::SocketAddress address(server.host, server.port);
+            if (server.isTls && !server.hostname.empty() && !address.IsUnresolvedIP()) {
+                // YonSeGram: the relay is reached by IP but named in the TLS handshake (SNI).
+                const rtc::IPAddress ip = address.ipaddr();
+                address = rtc::SocketAddress(server.hostname, server.port);
+                address.SetResolvedIP(ip);
+            }
             cricket::RelayServerConfig relayConfig(
-                rtc::SocketAddress(server.host, server.port),
+                address,
                 server.login,
                 server.password,
                 proto

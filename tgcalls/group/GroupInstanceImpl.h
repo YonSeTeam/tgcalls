@@ -188,6 +188,9 @@ struct GroupInstanceDescriptor {
     std::function<void(bool)> onMutedSpeechActivityDetected;
     std::function<std::vector<uint8_t>(std::vector<uint8_t> const &, int64_t, bool, int32_t)> e2eEncryptDecrypt;
     bool isConference{false};
+    // YonSeGram: TURN relays to reach the SFU through, and whether to use nothing else.
+    std::vector<RtcServer> turnServers;
+    bool relayOnly{false};
 };
 
 template <typename T>

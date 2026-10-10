@@ -53,6 +53,10 @@ struct RtcServer {
 	bool isTurn = false;
     bool isTcp = false;
     bool isTls = false;
+    // YonSeGram: a relay that is not Telegram's. It is taken over TCP and TLS even
+    // without Config::relayTcpTls, and hostname is its name for the TLS handshake.
+    bool isExternal = false;
+    std::string hostname;
 };
 
 enum class EndpointType {
