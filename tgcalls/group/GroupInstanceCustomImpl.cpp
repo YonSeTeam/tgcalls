@@ -131,6 +131,14 @@ static std::string formatTimestampMillis(int64_t timestamp) {
     return stringStream.str();
 }
 
+// YonSeGram: the screencast quality hooks below read the capture object directly; upstream
+// moved its own use of this helper into videoCaptureToGetVideoSource (VideoCaptureInterfaceImpl).
+static VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(VideoCaptureInterface *videoCapture) {
+    return videoCapture
+        ? static_cast<VideoCaptureInterfaceImpl*>(videoCapture)->object()->getSyncAssumingSameThread()
+        : nullptr;
+}
+
 struct OutgoingVideoFormat {
     cricket::VideoCodec videoCodec;
     absl::optional<cricket::VideoCodec> rtxCodec;
